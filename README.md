@@ -1,10 +1,10 @@
 # Streamed.pk HLS Stream Resolver
 
-Self-hosted **HLS stream resolver** for [streamed.pk](https://streamed.pk) live sports. It turns match and server selection into a playable **m3u8** playlist by replaying the [embed.st](https://embed.st) client handshake, decrypting the GOAT `/fetch` response with `lock.wasm`, and serving a local **HLS proxy** that injects the required Referer while unwrapping sleepercdn **WEBP** segments into raw **MPEG-TS**.
+Self-hosted **HLS stream resolver** for [streamed.pk](https://streamed.pk) live sports. It turns match and server selection into a playable **m3u8** playlist by replaying the [embed.st](https://embed.st) client handshake, decrypting the GOAT `/fetch` response with `lock.wasm`, and serving a local **HLS proxy** that injects the required Referer while unwrapping **WEBP** segments into raw **MPEG-TS**.
 
 The browser UI plays through [hls.js](https://github.com/video-dev/hls.js). The same resolve response exports a direct CDN playlist plus ready-made **VLC** and **mpv** commands when you want an external player instead of the built-in page.
 
-Requires **Node.js** with ESM support, **`curl` on `PATH`**, and network access to streamed.pk, embed.st, and the upstream CDN.
+Requires **Node.js** with ESM support (and the Impit native binary from `npm install`) plus network access to streamed.pk, embed.st, and the upstream CDN.
 
 ## Table of Contents
 
@@ -25,7 +25,7 @@ Requires **Node.js** with ESM support, **`curl` on `PATH`**, and network access 
 
 A streamed.pk watch page is not a stream. It lists live sports matches and points each server (Admin, Alpha, Golf, and the rest) at an **embed.st** player. The real **HLS playlist URL never appears in HTML**. The official player posts a protobuf body to embed.st `/fetch`, reads a `goat` header, runs **WASM** unlock, then requests a tokenized CDN **m3u8** (typically `*.strmd.st`) with `Referer: https://embed.st/`.
 
-Bare Node `fetch` against that CDN often returns **403**. Segment hosts on sleepercdn wrap MPEG-TS inside a **RIFF/WEBP** container (EXIF payload), so a naive proxy that forwards bytes as `video/mp2t` will buffer forever or fail decode. This resolver copies the official path end to end: catalog → unlock → highest-bandwidth media playlist → curl-backed relay with streaming unwrap → browser or VLC/mpv.
+Bare Node `fetch` against that CDN often returns **403**. Media playlist URIs wrap MPEG-TS inside a **RIFF/WEBP** container (EXIF payload), so a naive proxy that forwards bytes as `video/mp2t` will buffer forever or fail decode. This resolver copies the official path end to end: catalog → unlock → highest-bandwidth media playlist → Impit `chrome151` relay with streaming unwrap → browser or VLC/mpv.
 
 ## Quick Start
 
@@ -73,7 +73,7 @@ Three upstream layers sit behind one local origin:
 | --- | --- | --- |
 | Catalog | streamed.pk | Sports, live matches, per-source stream lists |
 | Unlock | embed.st | Protobuf `/fetch`, `goat` header, `lock.wasm` decrypt |
-| Media | `*.strmd.st`, sleepercdn | Master/media m3u8 and WEBP-wrapped MPEG-TS segments |
+| Media | `*.strmd.st` + playlist segment URIs | Master/media m3u8 and WEBP-wrapped MPEG-TS |
 
 ```mermaid
 sequenceDiagram
@@ -81,7 +81,7 @@ sequenceDiagram
   participant API as Local Server
   participant SPK as streamed.pk
   participant EST as embed.st
-  participant CDN as strmd.st / sleepercdn
+  participant CDN as strmd.st / segment CDN
 
   UI->>API: GET /api/matches?sport=&scope=live
   API->>SPK: /api/matches/live (+ stream probe)
@@ -97,12 +97,12 @@ sequenceDiagram
   API->>EST: POST /fetch (protobuf)
   EST-->>API: goat + ciphertext
   API->>API: lock.wasm unlock (worker)
-  API->>CDN: curl master m3u8 (Referer)
+  API->>CDN: Impit Chrome TLS master m3u8 (Referer)
   API->>API: select highest BANDWIDTH media
   API-->>UI: m3u8, referer, relay
 
   UI->>API: GET /api/hls (playlist + segments)
-  API->>CDN: curl with Referer / Origin
+  API->>CDN: Impit with Referer / Origin
   API-->>UI: rewritten m3u8 / unwrapped TS
 ```
 
@@ -122,7 +122,7 @@ Steps after input validation (`src/handlers/resolve.ts`):
 1. Build an embed **slot** (`source` / `id` / `stream` → `embed.st/embed/...`).
 2. **Golf** → `unlockGolf` maps to an ingest slot; other sources → `resolveGoat`.
 3. GOAT path encodes a protobuf body (`src/goat/proto.ts`), `POST`s embed.st `/fetch` (`src/goat/fetch.ts`), and decrypts in a worker thread with happy-dom + vendored `lock.wasm` (`src/goat/lock.ts`, `src/goat/lock-worker.ts`).
-4. Pull the unlocked playlist with curl; if it is a master, **select the highest `BANDWIDTH` media URI** (official JW player starts on `high/mono.m3u8`).
+4. Pull the unlocked playlist with Impit Chrome TLS; if it is a master, **select the highest `BANDWIDTH` media URI** (official JW player starts on `high/mono.m3u8`).
 5. Return `m3u8`, `referer` (`https://embed.st/`), and `relay` (`/api/hls?url=&referer=`).
 
 Tokens are live and short-lived. Nothing is cached on disk.
@@ -131,10 +131,9 @@ Tokens are live and short-lived. Nothing is cached on disk.
 
 `GET /api/hls` (`src/proxy/hls.ts`) is the referer-aware **HLS proxy**:
 
-- Upstream pulls go through **curl** (`src/proxy/pull.ts`) with browser User-Agent, `Referer`, and `Origin` — required because Node TLS fingerprints are blocked on the CDN.
-- Playlists are rewritten so every media URI and `URI="…"` attribute loops back through `/api/hls`.
-- sleepercdn segment URLs stream with `curl -N`: parse the WEBP header early, emit EXIF MPEG-TS as soon as length is known, and kill the curl child when the TS body is complete (`pullGoatSegmentStream`).
-- Non-streaming fallbacks still unwrap full buffers via `unwrapGoatSegment` (RIFF/WEBP → EXIF → 188-byte TS packets).
+- Upstream pulls go through **Impit** (`src/proxy/pull.ts`) with the `chrome151` TLS fingerprint plus `Referer` and `Origin`.
+- Playlists (`*.m3u8`) are rewritten so every media URI and `URI="…"` attribute loops back through `/api/hls`.
+- Every other URI is a WEBP segment: parse the RIFF header, emit EXIF MPEG-TS as soon as length is known, and abort the Impit request when the TS body is complete (`pullGoatSegmentStream`).
 
 The HTTP server pipes response bodies (`src/server/main.ts`) instead of buffering `arrayBuffer()`, so first-byte latency tracks upstream TTFB rather than full segment download time.
 
@@ -221,7 +220,7 @@ Environment variables (`src/config/site.ts`):
 | `PORT` | `3000` | HTTP listen port |
 | `STREAMED_ORIGIN` | `https://streamed.pk` | Catalog API origin |
 | `EMBED_ORIGIN` | `https://embed.st` | Unlock / Referer origin |
-| `USER_AGENT` | Chrome-like desktop UA | Shared on streamed.pk fetch and curl CDN pulls |
+| `USER_AGENT` | Chrome-like desktop UA | streamed.pk and embed.st Node `fetch` (CDN pulls use Impit’s Chrome 151 UA) |
 
 Source display names, descriptions, and sort tiers live in `src/config/sources.ts` (Admin through Intel).
 
@@ -234,7 +233,7 @@ src/
   config/        site origins and source catalog
   goat/          protobuf fetch, lock.wasm worker, golf → ingest, vendor WASM
   handlers/      catalog + resolve HTTP handlers
-  proxy/         curl pull, media playlist select, HLS rewrite, WEBP unwrap
+  proxy/         Impit CDN pull, media playlist select, HLS rewrite, WEBP stream unwrap
   server/        Node HTTP entry, router, static client files
   types/         shared models (Match, StreamLink, ResolveResult, Slot)
 ```
@@ -249,7 +248,7 @@ Build output lands in `dist/` (gitignored). Scratch RE artifacts stay in local `
 | Runtime | Node.js `http` + Web `Request`/`Response` |
 | Unlock | happy-dom + worker_threads + vendored `lock.wasm` / `lock-esm.mjs` |
 | Math helper | `big-integer` (WASM glue) |
-| CDN transport | `curl` (keep-alive-friendly streaming for segments) |
+| CDN transport | Impit `chrome151` (pooled TLS, streaming segments) |
 | Player | hls.js from jsDelivr |
 
 ## Limits
@@ -257,7 +256,7 @@ Build output lands in `dist/` (gitignored). Scratch RE artifacts stay in local `
 - Scope is **streamed.pk / embed.st** (including Golf’s third-party hop). Other aggregators use different unlock chains.
 - Live stream tokens expire; resolve again when playback dies.
 - Matches must still exist on streamed.pk live/all endpoints for `matchId` resolve.
-- **curl** is mandatory for CDN and playlist pulls; do not expect plain `fetch` to replace it without a fingerprint strategy.
+- CDN and playlist pulls use **Impit** `chrome151`.
 - The local relay is for localhost / trusted networks — it does not add auth.
 
 ## Disclaimer

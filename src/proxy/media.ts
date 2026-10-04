@@ -22,6 +22,6 @@ export async function selectMediaPlaylist(url: string, referer: string): Promise
       bestUri = next;
     }
   }
-  if (!bestUri) return url;
+  if (!bestUri) throw new Error("master playlist has no media uri");
   return bestUri.startsWith("http") ? bestUri : new URL(bestUri, url).href;
 }

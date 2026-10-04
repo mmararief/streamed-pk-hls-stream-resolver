@@ -4,6 +4,7 @@ type Match = {
   id: string;
   title: string;
   category: string;
+  date?: number;
   sources: { source: string; id: string }[];
 };
 
@@ -70,7 +71,6 @@ const ui = {
   proxied: document.getElementById("export-proxied-url") as HTMLInputElement,
   vlc: document.getElementById("export-vlc-url") as HTMLInputElement,
   mpv: document.getElementById("export-mpv-url") as HTMLInputElement,
-  timing: document.getElementById("timing-panel")!,
   resolveMs: document.getElementById("timing-resolve")!,
   playMs: document.getElementById("timing-play")!,
 };
@@ -94,6 +94,14 @@ const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 const streamKey = (stream: StreamRow) => `${stream.source}:${stream.id}:${stream.streamNo}`;
 const titleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
 const sourceLabel = (stream: StreamRow) => stream.sourceName || titleCase(stream.source);
+const isChannel = (match: Match) => match.date === 0;
+const feedMeta = (matches: Match[]) => {
+  const channels = matches.filter(isChannel).length;
+  const live = matches.length - channels;
+  if (channels && live) return `${live} live · ${channels} channels`;
+  if (channels) return `${channels} channels`;
+  return `${live} live`;
+};
 
 const showError = (message: string) => {
   ui.error.textContent = message;
@@ -106,12 +114,15 @@ const clearError = () => {
 };
 
 const setIdle = () => {
+  if (state.timer) cancelAnimationFrame(state.timer.frame);
+  state.timer = null;
+  ui.resolveMs.textContent = ui.playMs.textContent = "—";
+  ui.resolveMs.className = ui.playMs.className = "timing__v";
   ui.screen.classList.remove("is-active");
   ui.video.hidden = true;
   ui.exports.hidden = true;
   ui.kicker.textContent = "Ready";
   ui.title.textContent = "Choose a Match to Start";
-  ui.timing.hidden = true;
   ui.direct.value = ui.proxied.value = ui.vlc.value = ui.mpv.value = "";
 };
 
@@ -121,15 +132,8 @@ const setPlaying = () => {
   ui.exports.hidden = false;
 };
 
-const stopTiming = () => {
-  if (!state.timer) return;
-  cancelAnimationFrame(state.timer.frame);
-  state.timer = null;
-};
-
 const startTiming = (): PlaybackTimer => {
-  stopTiming();
-  ui.timing.hidden = false;
+  if (state.timer) cancelAnimationFrame(state.timer.frame);
   ui.resolveMs.textContent = "0ms";
   ui.playMs.textContent = "waiting";
   ui.resolveMs.className = "timing__v is-live";
@@ -162,7 +166,8 @@ const startTiming = (): PlaybackTimer => {
       if (resolvedAt == null) this.markResolved();
       ui.playMs.textContent = formatMs(playedAt - (resolvedAt as number));
       ui.playMs.className = "timing__v is-done";
-      stopTiming();
+      if (state.timer) cancelAnimationFrame(state.timer.frame);
+      state.timer = null;
     },
   };
   return state.timer;
@@ -270,8 +275,11 @@ const renderMatches = () => {
       const sources = [...new Set(match.sources.map((entry) => entry.source))]
         .map(titleCase)
         .join(" · ");
+      const kind = isChannel(match) ? "Channel" : match.category;
       meta.textContent =
-        state.sportId === "all" ? `${match.category} · ${sources || "No sources"}` : sources || "No sources";
+        state.sportId === "all" || isChannel(match)
+          ? `${kind} · ${sources || "No sources"}`
+          : sources || "No sources";
       button.append(title, meta);
       button.onclick = () => void selectMatch(match);
       item.append(button);
@@ -281,7 +289,7 @@ const renderMatches = () => {
   if (!state.matches.length && !state.loading) {
     const empty = document.createElement("li");
     empty.className = "matches__empty";
-    empty.textContent = "No live matches for this sport right now.";
+    empty.textContent = "No live matches or channels for this sport right now.";
     ui.matches.append(empty);
   }
 };
@@ -410,7 +418,7 @@ const loadMatches = async () => {
     if (!response.ok) throw new Error("matches failed");
     state.matches = Array.isArray(matches) ? matches : [];
     ui.status.className = "status";
-    ui.liveMeta.textContent = `${state.matches.length} live`;
+    ui.liveMeta.textContent = feedMeta(state.matches);
   } catch (error) {
     state.matches = [];
     ui.status.className = "status is-error";
@@ -429,7 +437,6 @@ const selectMatch = async (match: Match) => {
   state.activeStreamKey = null;
   clearError();
   stopPlayback();
-  stopTiming();
   setIdle();
   ui.kicker.textContent = "Pick a server";
   ui.title.textContent = match.title;
@@ -443,7 +450,7 @@ const selectMatch = async (match: Match) => {
     state.streams = result.streams ?? [];
     renderServers();
     ui.status.className = "status";
-    ui.liveMeta.textContent = `${state.matches.length} live`;
+    ui.liveMeta.textContent = feedMeta(state.matches);
     if (!state.streams.length) showError("No active streams for this match right now.");
   } catch (error) {
     state.streams = [];
@@ -460,7 +467,6 @@ const playStream = async (stream: StreamRow) => {
   state.activeStreamKey = streamKey(stream);
   clearError();
   stopPlayback();
-  stopTiming();
   setIdle();
   ui.kicker.textContent = `${sourceLabel(stream)} · ${stream.hd ? "HD" : "SD"} · Stream ${stream.streamNo}`;
   ui.title.textContent = stream.title || ui.title.textContent || "Stream";
@@ -486,8 +492,6 @@ const playStream = async (stream: StreamRow) => {
     if (!result.relay) throw new Error("missing relay url");
     await startPlayback(result.relay, timing);
   } catch (error) {
-    stopTiming();
-    ui.timing.hidden = true;
     setIdle();
     ui.kicker.textContent = "Pick a server";
     ui.title.textContent = stream.title || "Choose a Match to Start";

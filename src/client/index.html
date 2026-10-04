@@ -16,7 +16,7 @@
     <header class="topbar">
       <div class="topbar__brand">
         <span class="topbar__logo">Streamed</span>
-        <span class="topbar__tag">Live</span>
+        <span class="topbar__tag">Live + Channels</span>
       </div>
       <div class="topbar__aside">
         <div class="status" aria-live="polite">
@@ -31,10 +31,10 @@
     <p id="error-message" class="banner" hidden></p>
 
     <div class="workspace">
-      <aside class="panel rail" aria-label="Live matches">
+      <aside class="panel rail" aria-label="Live matches and channels">
         <div class="panel__head">
           <span class="panel__label">1 · Matches</span>
-          <span class="panel__hint">Pick one</span>
+          <span class="panel__hint">Live + channels</span>
           <span id="match-count" class="panel__count">0</span>
         </div>
         <ul id="match-list" class="matches"></ul>
@@ -46,7 +46,7 @@
             <p id="stream-kicker" class="stage__kicker">Ready</p>
             <h1 id="stream-title" class="stage__title">Choose a Match to Start</h1>
           </div>
-          <ul id="timing-panel" class="timing" hidden>
+          <ul class="timing">
             <li class="timing__item">
               <span class="timing__k">Resolve</span>
               <span id="timing-resolve" class="timing__v">—</span>

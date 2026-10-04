@@ -217,11 +217,6 @@ const startPlayback = (url: string, timing: PlaybackTimer) => {
       state.hls.loadSource(url);
       return;
     }
-    if (ui.video.canPlayType("application/vnd.apple.mpegurl")) {
-      ui.video.src = url;
-      void ui.video.play().catch(() => undefined);
-      return;
-    }
     finish(false, new Error("HLS not supported"));
   });
 };

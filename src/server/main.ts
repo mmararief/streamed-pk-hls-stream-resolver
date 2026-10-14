@@ -1,3 +1,6 @@
+import dns from "node:dns";
+dns.setDefaultResultOrder("ipv4first");
+
 import { createServer, type IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 
@@ -14,6 +17,7 @@ async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
 createServer((incoming, outgoing) => {
   void (async () => {
     const host = incoming.headers.host ?? `localhost:${port}`;
+    const proto = (incoming.headers["x-forwarded-proto"] || "http");
     const headers = new Headers();
     for (const [key, value] of Object.entries(incoming.headers)) {
       if (typeof value === "string") headers.set(key, value);
@@ -32,7 +36,7 @@ createServer((incoming, outgoing) => {
       signal: abort.signal,
     };
     if (body && body.length) init.body = new Uint8Array(body);
-    const request = new Request(`http://${host}${incoming.url ?? "/"}`, init);
+    const request = new Request(`${proto}://${host}${incoming.url ?? "/"}`, init);
     const response = await handleRequest(request);
     if (outgoing.writableEnded || abort.signal.aborted) return;
     outgoing.statusCode = response.status;

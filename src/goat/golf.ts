@@ -10,11 +10,34 @@ function iframeSrc(html: string): string {
 }
 
 function ingestFromRocky(html: string): { id: string; stream: string } {
-  const m = html.match(/data-source="([^"]+)"/);
-  if (!m?.[1]) throw new Error("rockystream data-source missing");
+  let b64 = "";
+  const mAtob = html.match(/atob\(["']([^"']+)["']\)/);
+  const mData = html.match(/data-source=["']([^"']+)["']/);
+
+  if (mAtob?.[1]) {
+    b64 = mAtob[1];
+  } else if (mData?.[1]) {
+    b64 = mData[1];
+  } else {
+    const mGeneric = html.match(/[A-Za-z0-9+/=]{30,}/g);
+    if (mGeneric) {
+      for (const cand of mGeneric) {
+        try {
+          const dec = Buffer.from(cand, "base64").toString("utf8");
+          if (dec.includes("/embed/ingest/")) {
+            b64 = cand;
+            break;
+          }
+        } catch {}
+      }
+    }
+  }
+
+  if (!b64) throw new Error("rockystream data-source or atob missing");
+
   let decoded: string;
   try {
-    decoded = Buffer.from(m[1], "base64").toString("utf8");
+    decoded = Buffer.from(b64, "base64").toString("utf8");
   } catch {
     throw new Error("rockystream data-source not base64");
   }

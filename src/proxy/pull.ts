@@ -115,7 +115,7 @@ export function pullGoatSegmentStream(
   });
 }
 
-function readGoatTsMeta(buf: Buffer, total: number): { offset: number; length: number } | null {
+export function readGoatTsMeta(buf: Buffer, total: number): { offset: number; length: number } | null {
   if (buf.length < 20 || buf.toString("ascii", 0, 4) !== "RIFF" || buf.toString("ascii", 8, 12) !== "WEBP") {
     return null;
   }
@@ -139,3 +139,11 @@ function readGoatTsMeta(buf: Buffer, total: number): { offset: number; length: n
   }
   return null;
 }
+
+export async function pullCleanSegment(url: string, referer: string): Promise<Buffer> {
+  const raw = await pull(url, referer);
+  const meta = readGoatTsMeta(raw, raw.length);
+  if (!meta) return raw;
+  return raw.subarray(meta.offset, meta.offset + meta.length);
+}
+
